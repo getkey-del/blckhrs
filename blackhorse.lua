@@ -1,525 +1,655 @@
---[[
-BlackHorse UI — полный каркас (LocalScript)
-- Черно-белая Apple-style палитра
-- Ключ: должен содержать "FREE_" и буквы для слова "horse" (в любом порядке)
-- Сохранение настроек в "__bh_store.json" (writefile/readfile) или fallback -> getgenv()
-- G1: вкладки Main, Stealer, Player, Spawner, Server
-- Все "чит"-функции — заглушки (print/toast)
---]]
-
--- Services
 local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
-local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
 
--- Storage helpers
-local SAVE_FILE = "__bh_store.json"
-local function safeIsFile(name)
-    local ok, res = pcall(function() return isfile and isfile(name) end)
-    if ok then return res else return false end
-end
-local function safeRead(name)
-    local ok, res = pcall(function() return readfile and readfile(name) end)
-    if ok then return res end
-    return nil
-end
-local function safeWrite(name, content)
-    local ok = pcall(function() if writefile then writefile(name, content) end end)
-    if not ok then
-        getgenv().__BH_TEMP_STORE = getgenv().__BH_TEMP_STORE or {}
-        getgenv().__BH_TEMP_STORE[name] = content
-    end
-end
-local function safeLoadStore()
-    local raw = safeRead(SAVE_FILE)
-    if raw then
-        local ok, dat = pcall(function() return HttpService:JSONDecode(raw) end)
-        if ok and type(dat) == "table" then return dat end
-    end
-    if getgenv().__BH_TEMP_STORE and getgenv().__BH_TEMP_STORE[SAVE_FILE] then
-        local ok, dat = pcall(function() return HttpService:JSONDecode(getgenv().__BH_TEMP_STORE[SAVE_FILE]) end)
-        if ok and type(dat) == "table" then return dat end
-    end
-    -- default store
-    return {
-        key = nil,
-        lastAuth = nil,
-        toggles = {},
-        inputs = {},
-        selections = {}
+-- Основной экран
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "BlackHorseUI"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ResetOnSpawn = false
+
+-- Переменные для хранения состояния
+local isVerified = false
+local verificationTime = 0
+local currentKey = ""
+local currentTab = "Main"
+
+-- Сохранение данных
+local function saveData()
+    local data = {
+        isVerified = isVerified,
+        verificationTime = verificationTime,
+        currentKey = currentKey
     }
-end
-local function safeSaveStore(store)
-    local ok, raw = pcall(function() return HttpService:JSONEncode(store) end)
-    if ok then safeWrite(SAVE_FILE, raw) end
-end
-
-local Store = safeLoadStore()
-
--- Utils
-local function new(inst, props, parent)
-    local o = Instance.new(inst)
-    if props then for k,v in pairs(props) do pcall(function() o[k] = v end) end end
-    if parent then o.Parent = parent end
-    return o
-end
-local function roundify(obj, r) new("UICorner", {CornerRadius = UDim.new(0, r or 10)}, obj) end
-local function stroke(obj, props)
-    props = props or {}
-    new("UIStroke", {
-        Color = props.Color or Color3.fromRGB(255,255,255),
-        Thickness = props.Thickness or 1,
-        Transparency = props.Transparency or 0.85,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    }, obj)
-end
-local function pad(obj, p) new("UIPadding", {
-    PaddingTop = UDim.new(0, p or 8),
-    PaddingBottom = UDim.new(0, p or 8),
-    PaddingLeft = UDim.new(0, p or 8),
-    PaddingRight = UDim.new(0, p or 8)
-}, obj) end
-
--- Parent GUI (gethui or CoreGui)
-local GUI_PARENT = (gethui and gethui()) or game:GetService("CoreGui")
-
--- Toast helper
-local function toast(msg, dur)
-    dur = dur or 2.2
-    local frame = new("Frame", {Size = UDim2.new(0, 360, 0, 52), Position = UDim2.new(0.5, -180, 1, -80), BackgroundColor3 = Color3.fromRGB(18,18,18)}, GUI_PARENT)
-    frame.AnchorPoint = Vector2.new(0.5, 1)
-    roundify(frame, 12); stroke(frame, {Transparency=0.6})
-    pad(frame, 10)
-    new("TextLabel", {Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Text = msg, TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansSemibold, TextSize = 16}, frame)
-    frame.Position = UDim2.new(0.5, -180, 1, 80)
-    TweenService:Create(frame, TweenInfo.new(0.18), {Position = UDim2.new(0.5, -180, 1, -80)}):Play()
-    task.delay(dur, function()
-        TweenService:Create(frame, TweenInfo.new(0.14), {Position = UDim2.new(0.5, -180, 1, 80)}):Play()
-        task.delay(0.16, function() pcall(function() frame:Destroy() end) end)
+    pcall(function()
+        writefile("blackhorse_data.txt", HttpService:JSONEncode(data))
     end)
 end
 
--- Simple helper for buttons
-local function createButton(parent, text, style)
-    style = style or "filled" -- or "outline"
-    local btn = new("TextButton", {
-        Parent = parent,
-        Size = UDim2.new(1, 0, 0, 36),
-        BackgroundColor3 = (style=="filled") and Color3.fromRGB(255,255,255) or Color3.fromRGB(16,16,16),
-        Text = text,
-        Font = Enum.Font.SourceSansBold,
-        TextSize = 16,
-        TextColor3 = (style=="filled") and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255),
-        AutoButtonColor = true
-    })
-    roundify(btn, 8)
-    if style == "outline" then stroke(btn, {Transparency=0.8, Thickness=1}) end
-    return btn
-end
-
--- Toggle creation (iOS style)
-local function createToggle(parent, labelText, default, onChange, nameInStore)
-    local holder = new("Frame", {Parent = parent, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,44)})
-    local label = new("TextLabel", {Parent = holder, BackgroundTransparency = 1, Size = UDim2.new(1,-80,1,0), Position = UDim2.new(0,8,0,0), Text = labelText, TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansSemibold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
-    local toggle = new("TextButton", {Parent = holder, Size = UDim2.new(0,56,0,30), Position = UDim2.new(1,-68,0,7), BackgroundColor3 = Color3.fromRGB(60,60,60), Text = ""})
-    roundify(toggle, 16)
-    local knob = new("Frame", {Parent = toggle, Size = UDim2.new(0,26,0,26), Position = UDim2.new(0,2,0,2), BackgroundColor3 = Color3.fromRGB(255,255,255)})
-    roundify(knob, 16); stroke(knob, {Transparency=0.5, Thickness=1})
-    -- initial state check store
-    local current = default
-    if nameInStore and Store.toggles and Store.toggles[nameInStore] ~= nil then
-        current = Store.toggles[nameInStore]
-    end
-    -- apply initial visuals
-    if current then
-        toggle.BackgroundColor3 = Color3.fromRGB(90,200,90)
-        knob.Position = UDim2.new(0, 28, 0, 2)
-    else
-        toggle.BackgroundColor3 = Color3.fromRGB(60,60,60)
-        knob.Position = UDim2.new(0, 2, 0, 2)
-    end
-    local function setState(v, call)
-        current = v and true or false
-        local bgGoal = {BackgroundColor3 = current and Color3.fromRGB(90,200,90) or Color3.fromRGB(60,60,60)}
-        local knobGoal = {Position = current and UDim2.new(0,28,0,2) or UDim2.new(0,2,0,2)}
-        TweenService:Create(toggle, TweenInfo.new(0.12), bgGoal):Play()
-        TweenService:Create(knob, TweenInfo.new(0.12), knobGoal):Play()
-        if nameInStore then
-            Store.toggles[nameInStore] = current
-            safeSaveStore(Store)
-        end
-        if call and onChange then pcall(onChange, current) end
-    end
-    toggle.MouseButton1Click:Connect(function() setState(not current, true) end)
-    return {
-        Set = function(v) setState(v, false) end,
-        Get = function() return current end,
-        Holder = holder
-    }
-end
-
--- Input creation
-local function createInput(parent, placeholder, nameInStore)
-    local box = new("TextBox", {Parent = parent, Size = UDim2.new(1,0,0,36), BackgroundColor3 = Color3.fromRGB(28,28,28), Text = "", PlaceholderText = placeholder or "", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSans, TextSize = 16})
-    roundify(box, 8); pad(box, 6)
-    if nameInStore and Store.inputs and Store.inputs[nameInStore] then
-        box.Text = tostring(Store.inputs[nameInStore])
-    end
-    box.FocusLost:Connect(function(enter)
-        if nameInStore then
-            Store.inputs[nameInStore] = box.Text
-            safeSaveStore(Store)
+local function loadData()
+    pcall(function()
+        if isfile("blackhorse_data.txt") then
+            local data = HttpService:JSONDecode(readfile("blackhorse_data.txt"))
+            isVerified = data.isVerified or false
+            verificationTime = data.verificationTime or 0
+            currentKey = data.currentKey or ""
         end
     end)
-    return box
 end
 
--- Simple dropdown using prev/next
-local function createPicker(parent, options, nameInStore)
-    local frame = new("Frame", {Parent = parent, Size = UDim2.new(1,0,0,44), BackgroundTransparency = 0})
-    roundify(frame, 8); stroke(frame, {Transparency=0.7})
-    local label = new("TextLabel", {Parent = frame, Size = UDim2.new(1,-120,1,0), Position = UDim2.new(0,8,0,0), BackgroundTransparency = 1, Text = options[1], TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansSemibold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
-    local btnPrev = createButton(frame, "‹", "outline"); btnPrev.Size = UDim2.new(0,44,1,-12); btnPrev.Position = UDim2.new(1,-96,0,6)
-    local btnNext = createButton(frame, "›", "outline"); btnNext.Size = UDim2.new(0,44,1,-12); btnNext.Position = UDim2.new(1,-48,0,6)
-    local idx = 1
-    if nameInStore and Store.selections and Store.selections[nameInStore] then
-        for i,opt in ipairs(options) do if opt == Store.selections[nameInStore] then idx = i break end end
+loadData()
+
+-- Функция для проверки ключа
+local function verifyKey(inputKey)
+    if string.sub(inputKey, 1, 5) ~= "FREE_" then
+        return false
     end
-    label.Text = options[idx]
-    btnPrev.MouseButton1Click:Connect(function()
-        idx = (idx - 2) % #options + 1
-        label.Text = options[idx]
-        if nameInStore then Store.selections[nameInStore] = label.Text; safeSaveStore(Store) end
-    end)
-    btnNext.MouseButton1Click:Connect(function()
-        idx = (idx % #options) + 1
-        label.Text = options[idx]
-        if nameInStore then Store.selections[nameInStore] = label.Text; safeSaveStore(Store) end
-    end)
-    return {
-        Frame = frame,
-        Get = function() return options[idx] end,
-        Set = function(v) for i,opt in ipairs(options) do if opt==v then idx=i; label.Text=opt; if nameInStore then Store.selections[nameInStore]=opt; safeSaveStore(Store) end; break end end
-    }
+    
+    local rest = string.sub(inputKey, 6)
+    local lettersFound = {h = false, o = false, r = false, s = false, e = false}
+    local temp = rest:lower()
+    
+    for letter in pairs(lettersFound) do
+        local pos = string.find(temp, letter)
+        if pos then
+            lettersFound[letter] = true
+            temp = temp:sub(1, pos-1) .. temp:sub(pos+1)
+        end
+    end
+    
+    for _, found in pairs(lettersFound) do
+        if not found then
+            return false
+        end
+    end
+    
+    return true
 end
 
--- Window builder
-local function createWindow(titleText, w, h)
-    local win = new("Frame", {Parent = GUI_PARENT, Size = UDim2.new(0, w or 680, 0, h or 420), Position = UDim2.new(0.5, -(w or 680)/2, 0.5, -(h or 420)/2), BackgroundColor3 = Color3.fromRGB(0,0,0), Active = true, Draggable = true})
-    roundify(win, 14); stroke(win, {Transparency=0.7})
-    local titlebar = new("Frame", {Parent = win, Size = UDim2.new(1,0,0,44), BackgroundColor3 = Color3.fromRGB(10,10,10)})
-    roundify(titlebar, 12); stroke(titlebar, {Transparency=0.8})
-    local title = new("TextLabel", {Parent = titlebar, Position = UDim2.new(0,12,0,0), Size = UDim2.new(1,-160,1,0), BackgroundTransparency = 1, Text = titleText, TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Left})
-    local controls = new("Frame", {Parent = titlebar, Size = UDim2.new(0,128,1,0), Position = UDim2.new(1,-128,0,0), BackgroundTransparency = 1})
-    pad(controls, 6)
-    -- control buttons
-    local btnMin = createButton(controls, "—", "outline"); btnMin.Size = UDim2.new(0,36,1,-12)
-    local btnMax = createButton(controls, "▢", "outline"); btnMax.Size = UDim2.new(0,36,1,-12)
-    local btnClose = createButton(controls, "✕", "outline"); btnClose.Size = UDim2.new(0,36,1,-12)
-    local content = new("Frame", {Parent = win, Size = UDim2.new(1,-24,1,-44-16), Position = UDim2.new(0,12,0,44+8), BackgroundTransparency = 1})
-    pad(content, 8)
-    -- minimize/max behavior
-    local isFullscreen = false
-    local original = {Position = win.Position, Size = win.Size}
-    btnMax.MouseButton1Click:Connect(function()
-        isFullscreen = not isFullscreen
-        if isFullscreen then
-            original.Position = win.Position; original.Size = win.Size
-            TweenService:Create(win, TweenInfo.new(0.18), {Position = UDim2.new(0,0,0,0), Size = UDim2.new(1,0,1,0)}):Play()
+-- Функция создания закругленного окна
+local function createRoundedFrame(parent, size, position, cornerRadius)
+    local frame = Instance.new("Frame")
+    frame.Size = size
+    frame.Position = position
+    frame.BackgroundColor3 = Color3.new(0, 0, 0)
+    frame.BorderSizePixel = 0
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, cornerRadius)
+    corner.Parent = frame
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.new(1, 1, 1)
+    stroke.Thickness = 2
+    stroke.Parent = frame
+    
+    frame.Parent = parent
+    return frame
+end
+
+-- Функция создания кнопки
+local function createButton(parent, text, size, position, callback, isOutline)
+    local button = Instance.new("TextButton")
+    button.Size = size
+    button.Position = position
+    button.BackgroundColor3 = isOutline and Color3.new(0, 0, 0) or Color3.new(1, 1, 1)
+    button.TextColor3 = isOutline and Color3.new(1, 1, 1) or Color3.new(0, 0, 0)
+    button.Text = text
+    button.Font = Enum.Font.SourceSansSemibold
+    button.TextSize = 14
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = button
+    
+    if isOutline then
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.new(1, 1, 1)
+        stroke.Thickness = 2
+        stroke.Parent = button
+    end
+    
+    button.MouseButton1Click:Connect(callback)
+    button.Parent = parent
+    
+    button.MouseEnter:Connect(function()
+        button.BackgroundColor3 = isOutline and Color3.new(0.2, 0.2, 0.2) or Color3.new(0.9, 0.9, 0.9)
+    end)
+    
+    button.MouseLeave:Connect(function()
+        button.BackgroundColor3 = isOutline and Color3.new(0, 0, 0) or Color3.new(1, 1, 1)
+    end)
+    
+    return button
+end
+
+-- Функция создания переключателя iOS стиля
+local function createToggle(parent, text, position, defaultState)
+    local toggleFrame = Instance.new("Frame")
+    toggleFrame.Size = UDim2.new(0, 300, 0, 30)
+    toggleFrame.Position = position
+    toggleFrame.BackgroundTransparency = 1
+    toggleFrame.Parent = parent
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 250, 0, 30)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Font = Enum.Font.SourceSansSemibold
+    label.TextSize = 14
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = toggleFrame
+    
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Size = UDim2.new(0, 40, 0, 20)
+    toggleButton.Position = UDim2.new(1, -45, 0, 5)
+    toggleButton.BackgroundColor3 = defaultState and Color3.new(0, 0.7, 0) or Color3.new(0.5, 0.5, 0.5)
+    toggleButton.Text = ""
+    toggleButton.ZIndex = 2
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = toggleButton
+    
+    local toggleCircle = Instance.new("Frame")
+    toggleCircle.Size = UDim2.new(0, 16, 0, 16)
+    toggleCircle.Position = defaultState and UDim2.new(0, 22, 0, 2) or UDim2.new(0, 2, 0, 2)
+    toggleCircle.BackgroundColor3 = Color3.new(1, 1, 1)
+    toggleCircle.ZIndex = 3
+    
+    local circleCorner = Instance.new("UICorner")
+    circleCorner.CornerRadius = UDim.new(0, 8)
+    circleCorner.Parent = toggleCircle
+    
+    local isOn = defaultState
+    
+    local function updateToggle()
+        if isOn then
+            toggleButton.BackgroundColor3 = Color3.new(0, 0.7, 0)
+            toggleCircle.Position = UDim2.new(0, 22, 0, 2)
         else
-            TweenService:Create(win, TweenInfo.new(0.18), {Position = original.Position, Size = original.Size}):Play()
+            toggleButton.BackgroundColor3 = Color3.new(0.5, 0.5, 0.5)
+            toggleCircle.Position = UDim2.new(0, 2, 0, 2)
         end
+    end
+    
+    toggleButton.MouseButton1Click:Connect(function()
+        isOn = not isOn
+        updateToggle()
     end)
-    local minimized = false
-    btnMin.MouseButton1Click:Connect(function()
-        minimized = not minimized
-        content.Visible = not minimized
-        win.Size = minimized and UDim2.new(win.Size.X.Scale, win.Size.X.Offset, 0, 44) or (isFullscreen and UDim2.new(1,0,1,0) or original.Size)
-    end)
-    -- close -> bubble
-    local launcher
-    local function ensureLauncher()
-        if launcher and launcher.Parent then return end
-        launcher = new("ImageButton", {Parent = GUI_PARENT, Size = UDim2.new(0,56,0,56), Position = UDim2.new(0,20,1,-96), BackgroundColor3 = Color3.fromRGB(22,22,22), AutoButtonColor = true})
-        roundify(launcher, 28); stroke(launcher, {Transparency=0.7})
-        new("TextLabel", {Parent = launcher, BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0), Text = "🐎", Font = Enum.Font.SourceSansBold, TextSize = 28, TextColor3 = Color3.fromRGB(255,255,255)})
-        launcher.Active = true; launcher.Draggable = true
-        launcher.MouseButton1Click:Connect(function()
-            win.Visible = true
-            pcall(function() launcher:Destroy() end)
+    
+    toggleCircle.Parent = toggleButton
+    toggleButton.Parent = toggleFrame
+    
+    updateToggle()
+    
+    return toggleButton, function() return isOn end, function(value) isOn = value; updateToggle() end
+end
+
+-- Функция создания выпадающего списка
+local function createDropdown(parent, options, position, defaultText)
+    local dropdownFrame = Instance.new("Frame")
+    dropdownFrame.Size = UDim2.new(0, 200, 0, 30)
+    dropdownFrame.Position = position
+    dropdownFrame.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+    dropdownFrame.Parent = parent
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = dropdownFrame
+    
+    local selectedLabel = Instance.new("TextLabel")
+    selectedLabel.Size = UDim2.new(0, 170, 0, 30)
+    selectedLabel.Position = UDim2.new(0, 10, 0, 0)
+    selectedLabel.BackgroundTransparency = 1
+    selectedLabel.Text = defaultText or "Select..."
+    selectedLabel.TextColor3 = Color3.new(1, 1, 1)
+    selectedLabel.Font = Enum.Font.SourceSans
+    selectedLabel.TextSize = 14
+    selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    selectedLabel.Parent = dropdownFrame
+    
+    local arrow = Instance.new("TextLabel")
+    arrow.Size = UDim2.new(0, 20, 0, 30)
+    arrow.Position = UDim2.new(1, -20, 0, 0)
+    arrow.BackgroundTransparency = 1
+    arrow.Text = "▼"
+    arrow.TextColor3 = Color3.new(1, 1, 1)
+    arrow.Font = Enum.Font.SourceSans
+    arrow.TextSize = 12
+    arrow.Parent = dropdownFrame
+    
+    local optionsFrame = Instance.new("ScrollingFrame")
+    optionsFrame.Size = UDim2.new(0, 200, 0, 0)
+    optionsFrame.Position = UDim2.new(0, 0, 1, 5)
+    optionsFrame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+    optionsFrame.BorderSizePixel = 0
+    optionsFrame.Visible = false
+    optionsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    optionsFrame.ScrollBarThickness = 5
+    optionsFrame.Parent = dropdownFrame
+    
+    local corner2 = Instance.new("UICorner")
+    corner2.CornerRadius = UDim.new(0, 8)
+    corner2.Parent = optionsFrame
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = optionsFrame
+    
+    local selectedOption = nil
+    
+    local function toggleOptions()
+        optionsFrame.Visible = not optionsFrame.Visible
+        if optionsFrame.Visible then
+            optionsFrame.Size = UDim2.new(0, 200, 0, math.min(#options * 30, 150))
+        else
+            optionsFrame.Size = UDim2.new(0, 200, 0, 0)
+        end
+    end
+    
+    dropdownFrame.MouseButton1Click:Connect(toggleOptions)
+    
+    for _, option in ipairs(options) do
+        local optionButton = Instance.new("TextButton")
+        optionButton.Size = UDim2.new(0, 200, 0, 30)
+        optionButton.BackgroundColor3 = Color3.new(0.15, 0.15, 0.15)
+        optionButton.TextColor3 = Color3.new(1, 1, 1)
+        optionButton.Text = option
+        optionButton.Font = Enum.Font.SourceSans
+        optionButton.TextSize = 14
+        optionButton.BorderSizePixel = 0
+        
+        optionButton.MouseButton1Click:Connect(function()
+            selectedLabel.Text = option
+            selectedOption = option
+            toggleOptions()
         end)
+        
+        optionButton.Parent = optionsFrame
     end
-    btnClose.MouseButton1Click:Connect(function()
-        win.Visible = false
-        ensureLauncher()
-        toast("BlackHorse UI hidden. Click bubble to restore.")
-    end)
-    return win, content, title
+    
+    return dropdownFrame, function() return selectedOption end
 end
 
--- Subwindow helper (draggable modal)
-local function createSubwindow(titleText, w, h)
-    local sub = new("Frame", {Parent = GUI_PARENT, Size = UDim2.new(0, w or 380, 0, h or 220), Position = UDim2.new(0.5, -(w or 380)/2, 0.5, -(h or 220)/2), BackgroundColor3 = Color3.fromRGB(12,12,12), Active = true, Draggable = true})
-    roundify(sub, 12); stroke(sub, {Transparency=0.7})
-    local tb = new("Frame", {Parent = sub, Size = UDim2.new(1,0,0,40), BackgroundColor3 = Color3.fromRGB(18,18,18)})
-    roundify(tb, 10); stroke(tb, {Transparency=0.7})
-    new("TextLabel", {Parent = tb, BackgroundTransparency = 1, Size = UDim2.new(1,-40,1,0), Position = UDim2.new(0,12,0,0), Text = titleText, TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
-    local close = createButton(tb, "✕", "outline"); close.Size = UDim2.new(0,36,1,-8); close.Position = UDim2.new(1,-44,0,4)
-    local content = new("Frame", {Parent = sub, Size = UDim2.new(1,-20,1,-40-12), Position = UDim2.new(0,10,0,40+6), BackgroundTransparency = 1})
-    pad(content, 8)
-    close.MouseButton1Click:Connect(function() pcall(function() sub:Destroy() end) end)
-    return sub, content
-end
+-- Создание главного окна авторизации
+local mainWindow = createRoundedFrame(ScreenGui, UDim2.new(0, 320, 0, 280), UDim2.new(0.5, -160, 0.5, -140), 15)
+mainWindow.Visible = not (isVerified and (os.time() - verificationTime) < (7 * 24 * 60 * 60))
 
--- Key check
-local function keyIsValid(k)
-    if type(k) ~= "string" then return false end
-    if not k:find("FREE_") then return false end
-    local lower = k:lower()
-    local needed = {h=true,o=true,r=true,s=true,e=true}
-    for ch in lower:gmatch(".") do
-        if needed[ch] then needed[ch] = nil end
-        if not next(needed) then break end
-    end
-    return next(needed) == nil
-end
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(0, 300, 0, 40)
+title.Position = UDim2.new(0, 10, 0, 10)
+title.BackgroundTransparency = 1
+title.Text = "Enter Key"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 20
+title.Parent = mainWindow
 
--- Placeholder game-actions (stubs) — заменяй своим кодом
-local function DoHackSteal() print("[BlackHorse] DoHackSteal (stub)"); toast("Hack Steal (stub)") end
-local function DoInstantSteal() print("[BlackHorse] DoInstantSteal (stub)"); toast("Instant Steal (stub)") end
-local function DoUpSteal() print("[BlackHorse] DoUpSteal (stub)"); toast("Up Steal (stub)") end
-local function DoSpawn(choice, id) print(("Spawn: %s (%s)"):format(choice, tostring(id))); toast("Spawn (stub)") end
-local function DoFindServer(option) print("Find server with min:", option); toast("Find Server (stub)") end
+local keyInput = Instance.new("TextBox")
+keyInput.Size = UDim2.new(0, 300, 0, 40)
+keyInput.Position = UDim2.new(0, 10, 0, 60)
+keyInput.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+keyInput.TextColor3 = Color3.new(1, 1, 1)
+keyInput.PlaceholderText = "FREE_xxxxxxxx"
+keyInput.Font = Enum.Font.SourceSans
+keyInput.TextSize = 16
+keyInput.Parent = mainWindow
 
--- Build Key Window (если нет валидного ключа или ключ просрочен)
-local function openKeyWindow()
-    local win, content = createWindow("BlackHorse — Enter Key", 560, 340)
-    pad(content, 6)
-    new("TextLabel", {Parent = content, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,30), Text = "Enter Key:", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansSemibold, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Left})
-    local keyBox = createInput(content, "FREE_... (must include letters to form 'horse')", nil)
-    keyBox.Size = UDim2.new(1,0,0,40)
-    local btnRow = new("Frame", {Parent = content, Size = UDim2.new(1,0,0,46), BackgroundTransparency = 1})
-    local verify = createButton(btnRow, "Verify", "filled"); verify.Position = UDim2.new(0,0,0,6)
-    verify.Size = UDim2.new(0.48, -6, 1, 0)
-    local getBtn = createButton(btnRow, "Get", "outline"); getBtn.Position = UDim2.new(0.52, 6, 0, 6); getBtn.Size = UDim2.new(0.48, -6, 1, 0)
-    verify.MouseButton1Click:Connect(function()
-        local key = keyBox.Text or ""
-        if keyIsValid(key) then
-            Store.key = key; Store.lastAuth = os.time(); safeSaveStore(Store)
-            toast("Key accepted ✓", 2)
-            task.delay(0.4, function()
-                win:Destroy()
-                openG1()
-            end)
-        else
-            keyBox.Text = "Invalid Key!"
-            keyBox.TextColor3 = Color3.fromRGB(255,120,120)
-            toast("Invalid key", 2)
-        end
-    end)
-    getBtn.MouseButton1Click:Connect(function()
-        local ok = pcall(function() if setclipboard then setclipboard("https://getkey-del.github.io/blackhorse/") end end)
-        toast("Link copied to clipboard (if available)", 2)
-        print("Open: https://getkey-del.github.io/blackhorse/")
-    end)
-end
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = keyInput
 
--- Build G1 window (main)
-function openG1()
-    -- main window
-    local win, content = createWindow("BlackHorse — G1", 900, 540)
-    -- sidebar
-    local sidebar = new("Frame", {Parent = content, Size = UDim2.new(0, 180, 1, 0), BackgroundColor3 = Color3.fromRGB(12,12,12)})
-    roundify(sidebar, 12); stroke(sidebar, {Transparency=0.7})
-    pad(sidebar, 10)
-    new("TextLabel", {Parent = sidebar, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,48), Text = "BlackHorse\n@blckhorsehub", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
-    local tabsHolder = new("Frame", {Parent = sidebar, Size = UDim2.new(1,0,1,-56), BackgroundTransparency = 1})
-    local function addTabButton(txt) local b = createButton(tabsHolder, txt, "outline"); b.Size = UDim2.new(1,0,0,38); return b end
-
-    local pagesHolder = new("Frame", {Parent = content, Size = UDim2.new(1,-200,1,0), Position = UDim2.new(0,200,0,0), BackgroundTransparency = 1})
-    pad(pagesHolder, 8)
-
-    local pageMain = new("Frame", {Parent = pagesHolder, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}); pageMain.Visible = true
-    local pageStealer = new("Frame", {Parent = pagesHolder, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}); pageStealer.Visible = false
-    local pagePlayer = new("Frame", {Parent = pagesHolder, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}); pagePlayer.Visible = false
-    local pageSpawner = new("Frame", {Parent = pagesHolder, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}); pageSpawner.Visible = false
-    local pageServer = new("Frame", {Parent = pagesHolder, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}); pageServer.Visible = false
-
-    local pages = {Main=pageMain, Stealer=pageStealer, Player=pagePlayer, Spawner=pageSpawner, Server=pageServer}
-    local btnMain = addTabButton("🏠  Main")
-    local btnStealer = addTabButton("🛰️  Stealer")
-    local btnPlayer = addTabButton("👤  Player")
-    local btnSpawner = addTabButton("🧪  Spawner")
-    local btnServer = addTabButton("🖥️  Server")
-    local function switch(to)
-        for k,v in pairs(pages) do v.Visible = (k==to) end
-    end
-    btnMain.MouseButton1Click:Connect(function() switch("Main") end)
-    btnStealer.MouseButton1Click:Connect(function() switch("Stealer") end)
-    btnPlayer.MouseButton1Click:Connect(function() switch("Player") end)
-    btnSpawner.MouseButton1Click:Connect(function() switch("Spawner") end)
-    btnServer.MouseButton1Click:Connect(function() switch("Server") end)
-
-    -- === PAGE: Main ===
-    new("TextLabel", {Parent = pageMain, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "Farm", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
-    new("TextLabel", {Parent = pageMain, BackgroundTransparency = 1, Position = UDim2.new(0,0,0,28), Size = UDim2.new(1,0,0,20), Text = "Turn off Speed Boost first.", TextColor3 = Color3.fromRGB(200,200,200), Font = Enum.Font.SourceSans, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left})
-
-    local vAutoBuy = createToggle(pageMain, "Auto buy Brainrot", false, function(v) print("AutoBuyBrainrot:", v) end, "AutoBuyBrainrot")
-    vAutoBuy.Holder.Position = UDim2.new(0,0,0,56)
-    local vAntiAFK = createToggle(pageMain, "Anti AFK", false, function(v) print("AntiAFK:", v) end, "AntiAFK"); vAntiAFK.Holder.Position = UDim2.new(0,0,0,56+52)
-    local vAutoLock = createToggle(pageMain, "Auto Lock Base", false, function(v) print("AutoLockBase:", v) end, "AutoLockBase"); vAutoLock.Holder.Position = UDim2.new(0,0,0,56+104)
-    local vAutoCollect = createToggle(pageMain, "Auto Collect", false, function(v) print("AutoCollect:", v) end, "AutoCollect"); vAutoCollect.Holder.Position = UDim2.new(0,0,0,56+156)
-
-    new("TextLabel", {Parent=pageMain, BackgroundTransparency=1, Position=UDim2.new(0,0,0,260), Size=UDim2.new(1,0,0,28), Text="Auto Sell", TextColor3=Color3.fromRGB(255,255,255), Font=Enum.Font.SourceSansBold, TextSize=18, TextXAlignment = Enum.TextXAlignment.Left})
-    local as1 = createToggle(pageMain, "Auto Sell All", false, function(v) print("AutoSellAll:", v) end, "AutoSellAll"); as1.Holder.Position = UDim2.new(0,0,0,300)
-    local as2 = createToggle(pageMain, "Auto Sell Bad Brainrot (<10k)", false, function(v) print("AutoSellBad:", v) end, "AutoSellBad"); as2.Holder.Position = UDim2.new(0,0,0,352)
-
-    -- === PAGE: Stealer ===
-    new("TextLabel", {Parent = pageStealer, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "Stealer Tools", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
-    -- Hack Steal toggle opens subwindow
-    local hackToggle = createToggle(pageStealer, "Hack Steal", false, function(v)
-        if v then
-            local sub, content = createSubwindow("Hack Steal", 420, 200)
-            new("TextLabel", {Parent=content, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), Text="Press to simulate STEALING action", TextColor3=Color3.fromRGB(200,200,200), Font=Enum.Font.SourceSans, TextSize=14})
-            local btn = createButton(content, "STEALING", "filled")
-            btn.MouseButton1Click:Connect(function() DoHackSteal() end)
-        else
-            print("Hack Steal disabled")
-        end
-    end, "HackSteal")
-    hackToggle.Holder.Position = UDim2.new(0,0,0,44)
-
-    -- Instant Steal button -> subwindow
-    local insBtn = createButton(pageStealer, "Instant Steal (Need 3 rebirths + open base)", "outline"); insBtn.Position = UDim2.new(0,0,0,110)
-    insBtn.MouseButton1Click:Connect(function()
-        local sub, content = createSubwindow("Instant Steal", 420, 200)
-        new("TextLabel", {Parent=content, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), Text="Instant Steal: Need 3 rebirths and open base", TextColor3=Color3.fromRGB(200,200,200), Font=Enum.Font.SourceSans, TextSize=14})
-        local btn = createButton(content, "STEALING", "filled")
-        btn.MouseButton1Click:Connect(DoInstantSteal)
-    end)
-
-    -- Up Steal
-    local upBtn = createButton(pageStealer, "Up Steal", "outline"); upBtn.Position = UDim2.new(0,0,0,160)
-    upBtn.MouseButton1Click:Connect(function()
-        local sub, content = createSubwindow("Up Steal", 420, 230)
-        local infToggle = createToggle(content, "Infinity Jump", false, function(v) print("InfJump:", v) end, "UpStealInfJump")
-        infToggle.Holder.Position = UDim2.new(0,0,0,36)
-        local btn = createButton(content, "Steal", "filled"); btn.Position = UDim2.new(0,0,0,88)
-        btn.MouseButton1Click:Connect(DoUpSteal)
-    end)
-
-    local autoSteal = createToggle(pageStealer, "Auto Steal", false, function(v) print("AutoSteal:", v) end, "AutoSteal"); autoSteal.Holder.Position = UDim2.new(0,0,0,220)
-    local autoKick = createToggle(pageStealer, "Auto Kick", false, function(v) print("AutoKick:", v) end, "AutoKick"); autoKick.Holder.Position = UDim2.new(0,0,0,272)
-
-    -- === PAGE: Player ===
-    new("TextLabel", {Parent = pagePlayer, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "Player", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
-    local pr = createToggle(pagePlayer, "Anti Ragdoll", false, function(v) print("AntiRagdoll:", v) end, "AntiRagdoll"); pr.Holder.Position = UDim2.new(0,0,0,44)
-    local sp = createToggle(pagePlayer, "Speed Boost (3 rebirths required)", false, function(v) print("SpeedBoost:", v) end, "SpeedBoost"); sp.Holder.Position = UDim2.new(0,0,0,96)
-    local ij = createToggle(pagePlayer, "Infinity Jump", false, function(v) print("InfinityJump:", v) end, "InfinityJump"); ij.Holder.Position = UDim2.new(0,0,0,148)
-    local jb = createToggle(pagePlayer, "Jump Boost", false, function(v) print("JumpBoostToggle:", v) end, "JumpBoostToggle"); jb.Holder.Position = UDim2.new(0,0,0,200)
-
-    new("TextLabel", {Parent = pagePlayer, BackgroundTransparency = 1, Position = UDim2.new(0,0,0,252), Size = UDim2.new(1,0,0,18), Text="Jump Boost Power (100–1000)", TextColor3 = Color3.fromRGB(200,200,200), Font = Enum.Font.SourceSans, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left})
-    local powerHolder = new("Frame", {Parent = pagePlayer, Size = UDim2.new(1,0,0,44), BackgroundTransparency = 1}); powerHolder.Position = UDim2.new(0,0,0,278)
-    local minus = createButton(powerHolder, "–", "outline"); minus.Size = UDim2.new(0,44,1,0); minus.Position = UDim2.new(0,8,0,4)
-    local inputPower = createInput(powerHolder, "300", "JumpPower"); inputPower.Size = UDim2.new(0,120,1,0); inputPower.Position = UDim2.new(0,60,0,4)
-    local plus = createButton(powerHolder, "+", "outline"); plus.Size = UDim2.new(0,44,1,0); plus.Position = UDim2.new(0,192,0,4)
-    local applyBtn = createButton(powerHolder, "Apply", "filled"); applyBtn.Size = UDim2.new(0,92,1,0); applyBtn.Position = UDim2.new(0,252,0,4)
-    -- initialize value
-    inputPower.Text = tostring(Store.inputs.JumpPower or 300)
-    minus.MouseButton1Click:Connect(function() local v = tonumber(inputPower.Text) or 300; v = math.clamp(v - 50, 100, 1000); inputPower.Text = tostring(v); Store.inputs.JumpPower = v; safeSaveStore(Store) end)
-    plus.MouseButton1Click:Connect(function() local v = tonumber(inputPower.Text) or 300; v = math.clamp(v + 50, 100, 1000); inputPower.Text = tostring(v); Store.inputs.JumpPower = v; safeSaveStore(Store) end)
-    applyBtn.MouseButton1Click:Connect(function() local v = tonumber(inputPower.Text) or 300; v = math.clamp(v, 100, 1000); inputPower.Text = tostring(v); Store.inputs.JumpPower = v; safeSaveStore(Store); toast("Jump Power set to "..tostring(v)) end)
-
-    -- other player toggles
-    local noclip = createToggle(pagePlayer, "Noclip (FIXED)", false, function(v) print("Noclip:", v) end, "Noclip"); noclip.Holder.Position = UDim2.new(0,0,0,340)
-    local antiTrap = createToggle(pagePlayer, "Anti Trap", false, function(v) print("AntiTrap:", v) end, "AntiTrap"); antiTrap.Holder.Position = UDim2.new(0,0,0,392)
-    createToggle(pagePlayer, "Anti Bee Launcher", false, function(v) print("AntiBee:", v) end, "AntiBee").Holder.Position = UDim2.new(0,0,0,444)
-    createToggle(pagePlayer, "Anti Taser Gun", false, function(v) print("AntiTaser:", v) end, "AntiTaser").Holder.Position = UDim2.new(0,0,0,496)
-    -- and others: Anti Boogie Bomb, Anti Medusa Head, Anti Slinger, Anti Body Swap
-    createToggle(pagePlayer, "Anti Boogie Bomb", false, function(v) print("AntiBoogie:", v) end, "AntiBoogie").Holder.Position = UDim2.new(0,420,0,0)
-    createToggle(pagePlayer, "Anti Medusa Head", false, function(v) print("AntiMedusa:", v) end, "AntiMedusa").Holder.Position = UDim2.new(0,420,0,0)
-    createToggle(pagePlayer, "Anti Slinger", false, function(v) print("AntiSlinger:", v) end, "AntiSlinger").Holder.Position = UDim2.new(0,420,0,0)
-    createToggle(pagePlayer, "Anti Body Swap", false, function(v) print("AntiBodySwap:", v) end, "AntiBodySwap").Holder.Position = UDim2.new(0,420,0,0)
-
-    -- === PAGE: Spawner ===
-    new("TextLabel", {Parent = pageSpawner, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "Spawner", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
-    new("TextLabel", {Parent = pageSpawner, BackgroundTransparency = 1, Position = UDim2.new(0,0,0,28), Size = UDim2.new(1,0,0,20), Text = "Choose Brainrot", TextColor3 = Color3.fromRGB(200,200,200), Font = Enum.Font.SourceSans, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left})
-    local choices = {"Noobini Pizzanini", "Pipi Kiwi", "Cappuchinno Assasino"}
-    local picker = createPicker(pageSpawner, choices, "SpawnChoice")
-    picker.Frame.Position = UDim2.new(0,0,0,56)
-    local idBox = createInput(pageSpawner, "Enter ID", "SpawnID"); idBox.Position = UDim2.new(0,0,0,116)
-    local spawnBtn = createButton(pageSpawner, "Spawn", "filled"); spawnBtn.Position = UDim2.new(0,0,0,172)
-    spawnBtn.MouseButton1Click:Connect(function()
-        DoSpawn(picker.Get(), idBox.Text)
-    end)
-
-    -- === PAGE: Server ===
-    new("TextLabel", {Parent = pageServer, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "Server", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.SourceSansBold, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
-    new("TextLabel", {Parent = pageServer, BackgroundTransparency = 1, Position = UDim2.new(0,0,0,28), Size = UDim2.new(1,0,0,20), Text = "Min money per sec to find", TextColor3 = Color3.fromRGB(200,200,200), Font = Enum.Font.SourceSans, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left})
-    local serverOptions = {"20K/s","50K/s","200K/s","500K/s","1m/s","5m/s","30m/s"}
-    local serverPicker = createPicker(pageServer, serverOptions, "ServerMinSpeed"); serverPicker.Frame.Position = UDim2.new(0,0,0,56)
-    local findBtn = createButton(pageServer, "Search Server", "filled"); findBtn.Position = UDim2.new(0,0,0,120)
-    findBtn.MouseButton1Click:Connect(function() DoFindServer(serverPicker.Get()) end)
-
-    toast("G1 opened")
-end
-
--- Auto-load: if there is a stored valid key and not expired -> open G1; if expired -> open G1 then ask reverify (per spec)
-local function autoFlow()
-    if Store.key and Store.lastAuth and (type(Store.lastAuth) == "number") then
-        local age = os.time() - Store.lastAuth
-        if age < 7 * 24 * 60 * 60 then
-            openG1()
-            return
-        else
-            -- expired: open G1 and then prompt re-verify
-            openG1()
-            toast("Key expired — please re-verify.", 3)
-            local sub, content = createSubwindow("Re-Verify Key", 420, 230)
-            new("TextLabel", {Parent=content, BackgroundTransparency=1, Size=UDim2.new(1,0,0,24), Text="Enter Key (FREE_...)", TextColor3=Color3.fromRGB(255,255,255), Font=Enum.Font.SourceSansSemibold, TextSize=16, TextXAlignment=Enum.TextXAlignment.Left})
-            local rebox = createInput(content, "FREE_... (must include letters for 'horse')", nil)
-            rebox.Size = UDim2.new(1,0,0,36)
-            local row = new("Frame", {Parent = content, Size = UDim2.new(1,0,0,46), BackgroundTransparency=1})
-            local ok = createButton(row, "Verify", "filled"); ok.Size = UDim2.new(0.48, -6, 1, 0); ok.Position = UDim2.new(0,0,0,6)
-            local getb = createButton(row, "Get", "outline"); getb.Size = UDim2.new(0.48, -6, 1, 0); getb.Position = UDim2.new(0.52, 6, 0, 6)
-            ok.MouseButton1Click:Connect(function()
-                if keyIsValid(rebox.Text) then
-                    Store.key = rebox.Text; Store.lastAuth = os.time(); safeSaveStore(Store)
-                    toast("Key updated ✓", 2)
-                    pcall(function() sub:Destroy() end)
-                else
-                    rebox.Text = "Invalid Key!"; rebox.TextColor3 = Color3.fromRGB(255,120,120)
-                    toast("Invalid key", 2)
-                end
-            end)
-            getb.MouseButton1Click:Connect(function() pcall(function() if setclipboard then setclipboard("https://getkey-del.github.io/blackhorse/") end end); toast("Link copied (if available)") end)
-            return
-        end
+local verifyButton = createButton(mainWindow, "Verify", UDim2.new(0, 300, 0, 40), UDim2.new(0, 10, 0, 110), function()
+    local key = keyInput.Text
+    if verifyKey(key) then
+        isVerified = true
+        currentKey = key
+        verificationTime = os.time()
+        keyInput.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+        saveData()
+        mainWindow.Visible = false
+        showG1Page()
     else
-        -- no key -> open key window
-        openKeyWindow()
+        keyInput.BackgroundColor3 = Color3.new(1, 0, 0)
+        local errorMsg = Instance.new("TextLabel")
+        errorMsg.Size = UDim2.new(0, 300, 0, 20)
+        errorMsg.Position = UDim2.new(0, 10, 0, 155)
+        errorMsg.BackgroundTransparency = 1
+        errorMsg.Text = "Invalid key format!"
+        errorMsg.TextColor3 = Color3.new(1, 0, 0)
+        errorMsg.Font = Enum.Font.SourceSans
+        errorMsg.TextSize = 14
+        errorMsg.Parent = mainWindow
+        
+        task.wait(2)
+        keyInput.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+        errorMsg:Destroy()
     end
-end
+end, false)
 
--- Hotkey: RightControl toggles UI visibility
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.RightControl then
-        -- hide/show all BlackHorse GUIs (quick approach: toggle all children that we created)
-        for _,c in pairs(GUI_PARENT:GetChildren()) do
-            if c:IsA("Frame") or c:IsA("ScreenGui") then
-                -- heuristic: has UICorner and text containing "BlackHorse" or emoji — we won't touch other GUIs (best-effort)
-                if c.Name:match("BlackHorse") or (c:FindFirstChildWhichIsA("UICorner") and c.Parent == GUI_PARENT) then
-                    c.Visible = not c.Visible
-                end
+local getKeyButton = createButton(mainWindow, "Get Key", UDim2.new(0, 300, 0, 40), UDim2.new(0, 10, 0, 160), function()
+    -- Открытие веб-страницы
+    pcall(function()
+        TeleportService:Teleport(1234567890, Player) -- Замените на реальный ID места
+    end)
+end, true)
+
+-- Функция показа страницы G1
+local function showG1Page()
+    if isVerified and (os.time() - verificationTime) >= (7 * 24 * 60 * 60) then
+        isVerified = false
+        saveData()
+        mainWindow.Visible = true
+        return
+    end
+    
+    local g1Window = createRoundedFrame(ScreenGui, UDim2.new(0, 600, 0, 500), UDim2.new(0.5, -300, 0.5, -250), 15)
+    g1Window.Visible = true
+    
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(0, 250, 0, 30)
+    header.Position = UDim2.new(0, 15, 0, 15)
+    header.BackgroundTransparency = 1
+    header.Text = "BlackHorse @blckhorsehub"
+    header.TextColor3 = Color3.new(1, 1, 1)
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 16
+    header.Parent = g1Window
+    
+    -- Создание вкладок
+    local tabs = {"Main", "Stealer", "Player", "Spawner", "Server"}
+    local tabButtons = {}
+    local tabFrames = {}
+    
+    for i, tabName in ipairs(tabs) do
+        local tabButton = createButton(g1Window, tabName, UDim2.new(0, 80, 0, 30), UDim2.new(1, -85 * (6 - i), 0, 15), function()
+            currentTab = tabName
+            for _, frame in pairs(tabFrames) do
+                frame.Visible = false
             end
+            tabFrames[i].Visible = true
+        end, true)
+        
+        tabButtons[i] = tabButton
+        
+        local tabFrame = Instance.new("ScrollingFrame")
+        tabFrame.Size = UDim2.new(0, 580, 0, 430)
+        tabFrame.Position = UDim2.new(0, 10, 0, 55)
+        tabFrame.BackgroundTransparency = 1
+        tabFrame.Visible = i == 1
+        tabFrame.ScrollBarThickness = 5
+        tabFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        tabFrame.Parent = g1Window
+        
+        tabFrames[i] = tabFrame
+        
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 10)
+        layout.Parent = tabFrame
+        
+        -- Заполнение содержимым вкладок
+        if i == 1 then -- Main
+            local farmTitle = Instance.new("TextLabel")
+            farmTitle.Size = UDim2.new(0, 200, 0, 30)
+            farmTitle.BackgroundTransparency = 1
+            farmTitle.Text = "Farm"
+            farmTitle.TextColor3 = Color3.new(1, 1, 1)
+            farmTitle.Font = Enum.Font.SourceSansBold
+            farmTitle.TextSize = 18
+            farmTitle.Parent = tabFrame
+            
+            local brainrotToggle, getBrainrotState = createToggle(tabFrame, "Auto buy Brainrot", UDim2.new(0, 0, 0, 0), false)
+            
+            local desc = Instance.new("TextLabel")
+            desc.Size = UDim2.new(0, 400, 0, 20)
+            desc.BackgroundTransparency = 1
+            desc.Text = "Turn off Speed Boost first."
+            desc.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+            desc.Font = Enum.Font.SourceSans
+            desc.TextSize = 12
+            desc.Parent = tabFrame
+            
+            createToggle(tabFrame, "Anti AFK", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Auto Lock Base", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Auto Collect", UDim2.new(0, 0, 0, 0), false)
+            
+            local sellTitle = Instance.new("TextLabel")
+            sellTitle.Size = UDim2.new(0, 200, 0, 30)
+            sellTitle.BackgroundTransparency = 1
+            sellTitle.Text = "Auto Sell"
+            sellTitle.TextColor3 = Color3.new(1, 1, 1)
+            sellTitle.Font = Enum.Font.SourceSansBold
+            sellTitle.TextSize = 18
+            sellTitle.Parent = tabFrame
+            
+            createToggle(tabFrame, "Auto Sell All", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Auto Sell Bad Brainrot (<10k)", UDim2.new(0, 0, 0, 0), false)
+            
+        elseif i == 2 then -- Stealer
+            local stealTitle = Instance.new("TextLabel")
+            stealTitle.Size = UDim2.new(0, 200, 0, 30)
+            stealTitle.BackgroundTransparency = 1
+            stealTitle.Text = "Steal Options"
+            stealTitle.TextColor3 = Color3.new(1, 1, 1)
+            stealTitle.Font = Enum.Font.SourceSansBold
+            stealTitle.TextSize = 18
+            stealTitle.Parent = tabFrame
+            
+            createToggle(tabFrame, "Hack Steal", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Instant Steal", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Up Steal", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Auto Steal", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Auto Kick", UDim2.new(0, 0, 0, 0), false)
+            
+        elseif i == 3 then -- Player
+            local playerTitle = Instance.new("TextLabel")
+            playerTitle.Size = UDim2.new(0, 200, 0, 30)
+            playerTitle.BackgroundTransparency = 1
+            playerTitle.Text = "Player Options"
+            playerTitle.TextColor3 = Color3.new(1, 1, 1)
+            playerTitle.Font = Enum.Font.SourceSansBold
+            playerTitle.TextSize = 18
+            playerTitle.Parent = tabFrame
+            
+            createToggle(tabFrame, "Anti Ragdoll", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Speed Boost (3 rebirths required)", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Infinity Jump", UDim2.new(0, 0, 0, 0), false)
+            
+            local jumpBoostFrame = Instance.new("Frame")
+            jumpBoostFrame.Size = UDim2.new(0, 300, 0, 30)
+            jumpBoostFrame.BackgroundTransparency = 1
+            jumpBoostFrame.Parent = tabFrame
+            
+            local jumpLabel = Instance.new("TextLabel")
+            jumpLabel.Size = UDim2.new(0, 150, 0, 30)
+            jumpLabel.Position = UDim2.new(0, 0, 0, 0)
+            jumpLabel.BackgroundTransparency = 1
+            jumpLabel.Text = "Jump Boost"
+            jumpLabel.TextColor3 = Color3.new(1, 1, 1)
+            jumpLabel.Font = Enum.Font.SourceSansSemibold
+            jumpLabel.TextSize = 14
+            jumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+            jumpLabel.Parent = jumpBoostFrame
+            
+            local jumpSlider = Instance.new("TextBox")
+            jumpSlider.Size = UDim2.new(0, 100, 0, 25)
+            jumpSlider.Position = UDim2.new(0, 160, 0, 2)
+            jumpSlider.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+            jumpSlider.TextColor3 = Color3.new(1, 1, 1)
+            jumpSlider.Text = "100"
+            jumpSlider.Font = Enum.Font.SourceSans
+            jumpSlider.TextSize = 14
+            jumpSlider.Parent = jumpBoostFrame
+            
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 5)
+            corner.Parent = jumpSlider
+            
+            createToggle(tabFrame, "Noclip (FIXED)", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Trap", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Bee Launcher", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Taser Gun", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Boogie Bomb", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Medusa Head", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Slinger", UDim2.new(0, 0, 0, 0), false)
+            createToggle(tabFrame, "Anti Body Swap", UDim2.new(0, 0, 0, 0), false)
+            
+        elseif i == 4 then -- Spawner
+            local spawnerTitle = Instance.new("TextLabel")
+            spawnerTitle.Size = UDim2.new(0, 200, 0, 30)
+            spawnerTitle.BackgroundTransparency = 1
+            spawnerTitle.Text = "Spawner"
+            spawnerTitle.TextColor3 = Color3.new(1, 1, 1)
+            spawnerTitle.Font = Enum.Font.SourceSansBold
+            spawnerTitle.TextSize = 18
+            spawnerTitle.Parent = tabFrame
+            
+            local brainrotDropdown, getBrainrot = createDropdown(tabFrame, {"Noobini", "Pizzanini", "Pipi Kiwi", "Cappuchinno", "Assasino"}, UDim2.new(0, 0, 0, 0), "Choose Brainrot")
+            
+            local idFrame = Instance.new("Frame")
+            idFrame.Size = UDim2.new(0, 300, 0, 40)
+            idFrame.BackgroundTransparency = 1
+            idFrame.Parent = tabFrame
+            
+            local idInput = Instance.new("TextBox")
+            idInput.Size = UDim2.new(0, 200, 0, 30)
+            idInput.Position = UDim2.new(0, 0, 0, 5)
+            idInput.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+            idInput.TextColor3 = Color3.new(1, 1, 1)
+            idInput.PlaceholderText = "Enter ID"
+            idInput.Font = Enum.Font.SourceSans
+            idInput.TextSize = 14
+            idInput.Parent = idFrame
+            
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 5)
+            corner.Parent = idInput
+            
+            local spawnButton = createButton(idFrame, "Spawn", UDim2.new(0, 80, 0, 30), UDim2.new(0, 210, 0, 5), function()
+                -- Логика спавна
+            end, false)
+            
+        elseif i == 5 then -- Server
+            local serverTitle = Instance.new("TextLabel")
+            serverTitle.Size = UDim2.new(0, 300, 0, 30)
+            serverTitle.BackgroundTransparency = 1
+            serverTitle.Text = "Min money per sec to find"
+            serverTitle.TextColor3 = Color3.new(1, 1, 1)
+            serverTitle.Font = Enum.Font.SourceSansBold
+            serverTitle.TextSize = 18
+            serverTitle.Parent = tabFrame
+            
+            local moneyOptions = {"20K/s", "50K/s", "200K/s", "500K/s", "1M/s", "5M/s", "30M/s"}
+            local moneyDropdown, getMoney = createDropdown(tabFrame, moneyOptions, UDim2.new(0, 0, 0, 0), "Select money")
         end
     end
-end)
+    
+    -- Кнопка сворачивания для G1 окна
+    createButton(g1Window, "-", UDim2.new(0, 30, 0, 30), UDim2.new(1, -40, 0, 15), function()
+        g1Window.Visible = false
+        
+        local restoreButton = createButton(ScreenGui, "○", UDim2.new(0, 30, 0, 30), UDim2.new(1, -40, 0, 15), function()
+            g1Window.Visible = true
+            restoreButton:Destroy()
+        end, true)
+    end, true)
+end
 
--- Start
-pcall(function() safeSaveStore(Store) end) -- ensure file exists
-autoFlow()
-print("BlackHorse UI loaded (full single-file).")
+-- Автоматическое открытие G1 если верифицирован
+if isVerified and (os.time() - verificationTime) < (7 * 24 * 60 * 60) then
+    showG1Page()
+elseif isVerified then
+    isVerified = false
+    saveData()
+    mainWindow.Visible = true
+    
+    local notification = Instance.new("TextLabel")
+    notification.Size = UDim2.new(0, 300, 0, 60)
+    notification.Position = UDim2.new(0.5, -150, 0.5, -30)
+    notification.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+    notification.TextColor3 = Color3.new(1, 1, 1)
+    notification.Text = "Your key has expired!\nPlease enter a new key."
+    notification.Font = Enum.Font.SourceSansBold
+    notification.TextSize = 16
+    notification.TextWrapped = true
+    notification.Parent = ScreenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = notification
+    
+    task.wait(3)
+    notification:Destroy()
+end
+
+-- Кнопка сворачивания для главного окна
+createButton(mainWindow, "-", UDim2.new(0, 30, 0, 30), UDim2.new(1, -40, 0, 10), function()
+    mainWindow.Visible = false
+    
+    local restoreButton = createButton(ScreenGui, "○", UDim2.new(0, 30, 0, 30), UDim2.new(1, -40, 0, 10), function()
+        mainWindow.Visible = true
+        restoreButton:Destroy()
+    end, true)
+end, true)
+
+-- Функция для создания модального окна Steal
+local function createStealWindow(titleText)
+    local stealWindow = createRoundedFrame(ScreenGui, UDim2.new(0, 300, 0, 200), UDim2.new(0.5, -150, 0.5, -100), 15)
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(0, 280, 0, 40)
+    title.Position = UDim2.new(0, 10, 0, 10)
+    title.BackgroundTransparency = 1
+    title.Text = titleText
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 18
+    title.Parent = stealWindow
+    
+    local stealButton = createButton(stealWindow, "STEALING", UDim2.new(0, 280, 0, 50), UDim2.new(0, 10, 0, 60), function()
+        -- Логика стила
+    end, false)
+    
+    local closeButton = createButton(stealWindow, "X", UDim2.new(0, 30, 0, 30), UDim2.new(1, -40, 0, 10), function()
+        stealWindow:Destroy()
+    end, true)
+    
+    -- Перетаскивание окна
+    local dragInput
+    local startPos
+    local dragging
+    
+    stealWindow.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            startPos = input.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    
+    stealWindow.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+    
+    game:GetService("UserInputService").InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - startPos
+            stealWindow.Position = UDim2.new(stealWindow.Position.X.Scale, stealWindow.Position.X.Offset + delta.X,
+                                            stealWindow.Position.Y.Scale, stealWindow.Position.Y.Offset + delta.Y)
+            startPos = input.Position
+        end
+    end)
+    
+    return stealWindow
+end
